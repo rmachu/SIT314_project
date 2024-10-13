@@ -1,0 +1,96 @@
+#include <SPI.h>
+#include <MFRC522.h>
+#include <WiFi.h>           // For Wi-Fi boards like ESP32 or ESP8266
+#include <PubSubClient.h>    // MQTT library
+#include <DHT.h>
+
+#define RST_PIN         2    // Configurable, see typical pin layout above
+#define SS_PIN          10   // Configurable, see typical pin layout above
+
+MFRC522 rfid(SS_PIN, RST_PIN);  // Create MFRC522 instance
+
+// Wi-Fi credentials
+const char* ssid = "Rachel";
+const char* password = "rachel5804";
+
+// MQTT Broker settings
+const char* mqttServer = "broker.hivemq.com";  
+const int mqttPort = 1883;
+const char* mqttTopic_product = "/management_123/product";            // Topic to publish UID data
+const char* mqttTopic_temp = "/management_123/temp";            // Topic to publish UID data
+
+WiFiClient wifiClient;
+PubSubClient client(wifiClient);
+
+// Timing variables
+unsigned long previousTempMillis = 0;  // Store last temperature reading time
+const long tempInterval = 10000;       // Temperature interval in milliseconds (10 seconds)
+
+void setup() {
+    Serial.begin(9600);               // Initialize serial communication
+    SPI.begin();                      // Init SPI bus
+    rfid.PCD_Init();                  // Init MFRC522
+    delay(4);                         // Optional delay
+    Serial.println(F("Connecting to WiFi..."));
+
+    // Connect to Wi-Fi
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println("\nWiFi connected");
+
+    // Connect to MQTT broker
+    client.setServer(mqttServer, mqttPort);
+    connectToMQTT();
+}
+
+void loop() {
+    // Ensure MQTT connection is active
+    if (!client.connected()) {
+        connectToMQTT();
+    }
+    client.loop(); // Maintain MQTT connection
+
+    unsigned long currentMillis = millis();
+
+    if (currentMillis - previousTempMillis >= tempInterval) {
+        previousTempMillis = currentMillis;
+
+        // Read DHT11 data
+        float temperature = random(10, 35);
+        float humidity = random(25, 75);
+
+        String tempPayload = "{\"temperature\":" + String(temperature, 1) + ",\"humidity\":" + String(humidity, 1) + "}";
+        client.publish(mqttTopic_temp, tempPayload.c_str());
+        Serial.println("Temperature and Humidity: " + tempPayload);
+    }
+
+    // Check for new RFID card and publish UID to RFID topic
+    if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+        String uid = "";
+        for (byte i = 0; i < rfid.uid.size; i++) {
+            uid += String(rfid.uid.uidByte[i], HEX);
+        }
+
+        // Publish UID to the rfid topic
+        client.publish(mqttTopic_product, uid.c_str());
+        Serial.println("UID: " + uid);
+        rfid.PICC_HaltA();  // Halt the RFID card
+    }
+}
+
+void connectToMQTT() {
+    Serial.print("Connecting to MQTT...");
+    while (!client.connected()) {
+        if (client.connect("ArduinoClient")) { // Client ID can be anything unique
+            Serial.println("connected");
+        } else {
+            Serial.print("Failed, rc=");
+            Serial.print(client.state());
+            Serial.println(" retrying in 5 seconds");
+            delay(5000);
+        }
+    }
+}
